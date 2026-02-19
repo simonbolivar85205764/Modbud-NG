@@ -45,14 +45,14 @@ The window is divided into three areas:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  ◈ MODBUS  MULTI-SESSION INDUSTRIAL CLIENT        2/3 connected │
+│   MODBUS  MULTI-SESSION INDUSTRIAL CLIENT      2/3 connected │
 ├─────────────┬────────────────────────────────────────────────┤
-│             │  ● PLC-01  192.168.1.10              ▶ CONNECT  │
-│ CONNECTIONS │  ⚙ Edit                                         │
-│             │ ─────────────────────────────────────────────── │
+│             │  ● PLC-01  192.168.1.10               CONNECT  │
+│ CONNECTIONS │   Edit                                         │
+│             │ ───────────────────────────────────────────────│
 │  ● PLC-01   │  [ ↓ READ ] [ ↑ WRITE ] [ ⟳ POLL ]            │
-│  ○ PLC-02   │                                                  │
-│  ● RTU-Dev  │                                                  │
+│  ○ PLC-02   │                                                │
+│  ● RTU-Dev  │                                                │
 │             ├────────────────────┬───────────────────────────┤
 │ [+ Add]     │  SESSION LOG       │  GLOBAL LOG               │
 │             │                    │                           │
@@ -302,5 +302,5 @@ Log out and back in for the change to take effect.
 ---
 
 ## License
-
+GNU General Public License v3.0
 This software is provided as-is for authorised use by qualified personnel on systems they have permission to access. Misuse against systems without authorisation may be illegal.
