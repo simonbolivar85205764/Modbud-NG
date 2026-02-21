@@ -798,46 +798,81 @@ class ModbusMultiClient:
         tab = ttk.Frame(nb, style="Card.TFrame", padding=10)
         nb.add(tab, text=" ↓  READ ")
 
-        ctrl_row = ttk.Frame(tab, style="Card.TFrame")
-        ctrl_row.pack(fill="x", pady=(0, 6))
+        # ── Row 1: Type / Address / Unit  (mirrors Write row 1) ────────────────
+        row1 = ttk.Frame(tab, style="Card.TFrame")
+        row1.pack(fill="x", pady=(0, 6))
 
-        lbl = lambda t, w=9: ttk.Label(ctrl_row, text=t, style="Card.TLabel", width=w)
+        lbl1 = lambda t, w=9: ttk.Label(row1, text=t, style="Card.TLabel", width=w)
 
-        lbl("Type").pack(side="left")
+        lbl1("Type").pack(side="left")
         rt_var = tk.StringVar(value=sess.read_type)
-        rt_cb = ttk.Combobox(ctrl_row, textvariable=rt_var, width=18, state="readonly",
-                              values=["Holding Registers", "Input Registers",
-                                      "Coils", "Discrete Inputs"])
-        rt_cb.pack(side="left", padx=(0, 10))
+        ttk.Combobox(row1, textvariable=rt_var, width=18, state="readonly",
+                     values=["Holding Registers", "Input Registers",
+                             "Coils", "Discrete Inputs"]).pack(side="left", padx=(0, 10))
         self._op_widgets["read_type"] = rt_var
 
-        lbl("Address", 8).pack(side="left")
+        lbl1("Address", 8).pack(side="left")
         ra_var = tk.StringVar(value=str(sess.read_addr))
-        ttk.Entry(ctrl_row, textvariable=ra_var, width=7).pack(side="left", padx=(0, 10))
+        ttk.Entry(row1, textvariable=ra_var, width=7).pack(side="left", padx=(0, 10))
         self._op_widgets["read_addr"] = ra_var
 
-        lbl("Count", 6).pack(side="left")
-        rc_var = tk.StringVar(value=str(sess.read_count))
-        ttk.Entry(ctrl_row, textvariable=rc_var, width=5).pack(side="left", padx=(0, 10))
-        self._op_widgets["read_count"] = rc_var
-
-        lbl("Unit", 4).pack(side="left")
+        lbl1("Unit", 4).pack(side="left")
         ru_var = tk.StringVar(value=str(sess.read_unit))
-        ttk.Entry(ctrl_row, textvariable=ru_var, width=4).pack(side="left", padx=(0, 10))
+        ttk.Entry(row1, textvariable=ru_var, width=4).pack(side="left")
         self._op_widgets["read_unit"] = ru_var
 
-        tk.Button(ctrl_row, text="READ", bg=BLUE_INFO, fg=BG_DEEP,
+        # ── Row 2: Count  (mirrors Write row 2 / value row) ────────────────────
+        row2 = ttk.Frame(tab, style="Card.TFrame")
+        row2.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(row2, text="Count", style="Card.TLabel", width=9).pack(side="left")
+        rc_var = tk.StringVar(value=str(sess.read_count))
+        ttk.Entry(row2, textvariable=rc_var, width=8).pack(side="left", padx=(0, 10))
+        self._op_widgets["read_count"] = rc_var
+        ttk.Label(row2, text="Max 125 registers  /  2000 coils",
+                  style="Dim.TLabel", font=FONT_MONO_SM).pack(side="left")
+
+        # ── Row 3: Action button  (mirrors Write row 3) ─────────────────────────
+        row3 = ttk.Frame(tab, style="Card.TFrame")
+        row3.pack(fill="x", pady=(0, 6))
+
+        tk.Button(row3, text="↓ READ ONCE", bg=BLUE_INFO, fg=BG_DEEP,
                   activebackground="#3a85d0", activeforeground=BG_DEEP,
-                  font=FONT_UI_B, relief="flat", padx=14, pady=3,
+                  font=FONT_UI_B, relief="flat", padx=14, pady=4,
                   cursor="hand2", bd=0,
                   command=lambda: self._do_read(sess.sid)).pack(side="left")
 
-        ttk.Label(ctrl_row, text="  Double-click row to label it",
-                  style="Dim.TLabel", font=FONT_MONO_XS).pack(side="right")
+        # ── Continuous read  (mirrors Continuous Write LabelFrame) ──────────────
+        cr_frame = ttk.LabelFrame(tab, text=" Continuous Read ", padding=8)
+        cr_frame.pack(fill="x", pady=(6, 4))
 
-        # ── Results table ──────────────────────────────────────────────────────
+        crrow = ttk.Frame(cr_frame, style="Card.TFrame")
+        crrow.pack(fill="x")
+
+        ttk.Label(crrow, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
+        ivl_var = tk.StringVar(value=str(sess.poll_interval))
+        ttk.Entry(crrow, textvariable=ivl_var, width=8).pack(side="left", padx=(0, 16))
+        self._op_widgets["poll_ivl"] = ivl_var
+
+        last_lbl = ttk.Label(crrow, text="Last: " + (sess.last_poll_ts or "—"),
+                             style="Dim.TLabel", font=FONT_MONO_SM)
+        last_lbl.pack(side="left")
+        self._op_widgets["poll_last"] = last_lbl
+
+        poll_btn = tk.Button(cr_frame, font=FONT_UI_B, relief="flat", pady=5,
+                             cursor="hand2", bd=0)
+        poll_btn.pack(fill="x", pady=(6, 0))
+        self._op_widgets["poll_btn"] = poll_btn
+        self._update_poll_btn(sess)
+        poll_btn.config(command=lambda: self._toggle_poll(sess.sid))
+
+        ttk.Label(cr_frame,
+                  text="Repeats the read above at the given interval.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
+
+        # ── Results table ───────────────────────────────────────────────────────
         tf = ttk.Frame(tab, style="Card.TFrame")
-        tf.pack(fill="both", expand=True)
+        tf.pack(fill="both", expand=True, pady=(6, 0))
 
         vsb = ttk.Scrollbar(tf, orient="vertical")
         vsb.pack(side="right", fill="y")
@@ -863,6 +898,9 @@ class ModbusMultiClient:
         tree.pack(fill="both", expand=True)
         self._op_widgets["read_tree"] = tree
 
+        ttk.Label(tab, text="Double-click any row to label that address",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(2, 0))
+
         # Double-click → label editor
         def _on_double_click(event):
             item = tree.identify_row(event.y)
@@ -871,9 +909,9 @@ class ModbusMultiClient:
             vals = tree.item(item, "values")
             if not vals:
                 return
-            addr_str = vals[1]   # Address column
-            rtype = self._op_widgets.get("read_type")
-            rtype_val = rtype.get() if rtype else "Holding Registers"
+            addr_str = vals[1]
+            rtype_var = self._op_widgets.get("read_type")
+            rtype_val = rtype_var.get() if rtype_var else "Holding Registers"
             label_key = f"{rtype_val}:{addr_str}"
             current_label = sess.reg_labels.get(label_key, "")
             new_label = simpledialog.askstring(
@@ -882,15 +920,12 @@ class ModbusMultiClient:
                 initialvalue=current_label,
                 parent=self.root)
             if new_label is None:
-                return   # cancelled
+                return
             new_label = new_label.strip()
             if new_label:
                 sess.reg_labels[label_key] = new_label
             elif label_key in sess.reg_labels:
                 del sess.reg_labels[label_key]
-            # Refresh just this row
-            rtype_now = self._op_widgets.get("read_type")
-            rt = rtype_now.get() if rtype_now else rtype_val
             tag = tree.item(item, "tags")[0] if tree.item(item, "tags") else "even"
             new_vals = list(vals)
             new_vals[0] = new_label
@@ -1005,62 +1040,85 @@ class ModbusMultiClient:
 
     # ─── Poll Tab ──────────────────────────────────────────────────────────────
     def _build_poll_tab(self, nb, sess: ConnectionSession):
+        """
+        Status-only overview of both continuous pollers.
+        Interval fields live on their respective tabs (Read / Write) to avoid
+        widget-key conflicts. This tab just shows live state and provides
+        start/stop toggles as a convenience.
+        """
         tab = ttk.Frame(nb, style="Card.TFrame", padding=10)
         nb.add(tab, text=" ⟳  POLL ")
 
-        # ── Read polling ────────────────────────────────────────────────────────
+        def _status_row(parent, key_prefix):
+            """Returns (dot_lbl, last_lbl, toggle_btn) without touching _op_widgets."""
+            hdr = ttk.Frame(parent, style="Card.TFrame")
+            hdr.pack(fill="x", pady=(0, 6))
+            dot = tk.Label(hdr, text="●", font=FONT_MONO_SM, bg=BG_CARD)
+            dot.pack(side="left", padx=(0, 6))
+            last = ttk.Label(hdr, text="Last: —", style="Dim.TLabel", font=FONT_MONO_SM)
+            last.pack(side="left")
+            ivl_lbl = ttk.Label(hdr, text="", style="Dim.TLabel", font=FONT_MONO_SM)
+            ivl_lbl.pack(side="right")
+            btn = tk.Button(parent, font=FONT_UI_B, relief="flat", pady=5,
+                            cursor="hand2", bd=0)
+            btn.pack(fill="x")
+            return dot, last, ivl_lbl, btn
+
+        # ── Continuous Read ─────────────────────────────────────────────────────
         rp = ttk.LabelFrame(tab, text=" Continuous Read ", padding=8)
         rp.pack(fill="x", pady=(0, 8))
 
-        rrow = ttk.Frame(rp, style="Card.TFrame")
-        rrow.pack(fill="x", pady=(0, 6))
+        rdot, rlast, rivl, rbtn = _status_row(rp, "read")
 
-        ttk.Label(rrow, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
-        ivl_var = tk.StringVar(value=str(sess.poll_interval))
-        ttk.Entry(rrow, textvariable=ivl_var, width=8).pack(side="left", padx=(0, 16))
-        self._op_widgets["poll_ivl"] = ivl_var
+        def _refresh_read():
+            active = sess.polling
+            rdot.config(fg=GREEN_OK if active else TEXT_DIM)
+            rlast.config(text="Last: " + (sess.last_poll_ts or "—"))
+            rivl.config(text=f"every {sess.poll_interval}s" if active else "")
+            if active:
+                rbtn.config(text="■  STOP READ POLLING", bg=RED_DIM, fg=RED_ERR,
+                            activebackground="#3a1010")
+            else:
+                rbtn.config(text="▶  START READ POLLING", bg=GREEN_DIM, fg=GREEN_OK,
+                            activebackground="#1a4030")
 
-        last_r = ttk.Label(rrow, text="Last: " + (sess.last_poll_ts or "—"),
-                           style="Dim.TLabel", font=FONT_MONO_SM)
-        last_r.pack(side="left")
-        self._op_widgets["poll_last"] = last_r
+        def _toggle_read():
+            self._toggle_poll(sess.sid)
+            tab.after(50, _refresh_read)
 
-        poll_btn = tk.Button(rp, font=FONT_UI_B, relief="flat", pady=5,
-                             cursor="hand2", bd=0)
-        poll_btn.pack(fill="x")
-        self._op_widgets["poll_btn"] = poll_btn
-        self._update_poll_btn(sess)
-        poll_btn.config(command=lambda: self._toggle_poll(sess.sid))
+        rbtn.config(command=_toggle_read)
+        ttk.Label(rp, text="Configure interval on the ↓ READ tab.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(6, 0))
 
-        ttk.Label(rp, text="Uses the Read tab settings (type, address, count, unit).",
-                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
-
-        # ── Write polling ───────────────────────────────────────────────────────
+        # ── Continuous Write ─────────────────────────────────────────────────────
         wp = ttk.LabelFrame(tab, text=" Continuous Write ", padding=8)
         wp.pack(fill="x", pady=(0, 4))
 
-        wrow = ttk.Frame(wp, style="Card.TFrame")
-        wrow.pack(fill="x", pady=(0, 6))
+        wdot, wlast, wivl, wbtn = _status_row(wp, "write")
 
-        ttk.Label(wrow, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
-        wivl_var2 = tk.StringVar(value=str(sess.write_poll_interval))
-        ttk.Entry(wrow, textvariable=wivl_var2, width=8).pack(side="left", padx=(0, 16))
-        self._op_widgets["write_ivl"] = wivl_var2
+        def _refresh_write():
+            active = sess.write_polling
+            wdot.config(fg=AMBER_GLOW if active else TEXT_DIM)
+            wlast.config(text="Last: " + (sess.last_write_poll_ts or "—"))
+            wivl.config(text=f"every {sess.write_poll_interval}s" if active else "")
+            if active:
+                wbtn.config(text="■  STOP WRITE POLLING", bg=RED_DIM, fg=RED_ERR,
+                            activebackground="#3a1010")
+            else:
+                wbtn.config(text="▶  START WRITE POLLING", bg="#3a2000", fg=AMBER_GLOW,
+                            activebackground=AMBER_DIM)
 
-        last_w = ttk.Label(wrow, text="Last: " + (sess.last_write_poll_ts or "—"),
-                           style="Dim.TLabel", font=FONT_MONO_SM)
-        last_w.pack(side="left")
-        self._op_widgets["write_poll_last"] = last_w
+        def _toggle_write():
+            self._toggle_write_poll(sess.sid)
+            tab.after(50, _refresh_write)
 
-        wpoll_btn = tk.Button(wp, font=FONT_UI_B, relief="flat", pady=5,
-                              cursor="hand2", bd=0)
-        wpoll_btn.pack(fill="x")
-        self._op_widgets["write_poll_btn"] = wpoll_btn
-        self._update_write_poll_btn(sess)
-        wpoll_btn.config(command=lambda: self._toggle_write_poll(sess.sid))
+        wbtn.config(command=_toggle_write)
+        ttk.Label(wp, text="Configure interval on the ↑ WRITE tab.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(6, 0))
 
-        ttk.Label(wp, text="Uses the Write tab settings. Confirm dialog is suppressed.",
-                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
+        # Initial paint
+        _refresh_read()
+        _refresh_write()
 
     def _update_poll_btn(self, sess: ConnectionSession):
         btn = self._op_widgets.get("poll_btn")
