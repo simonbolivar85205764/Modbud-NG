@@ -176,9 +176,28 @@ Select a session, then click the **↓ READ** tab.
 | Coils | FC01 | Read/write single-bit outputs (relays, digital outputs) |
 | Discrete Inputs | FC02 | Read-only single-bit inputs (switches, digital inputs) |
 
-Click **READ** to execute. Results appear in the table below, showing the address, decimal value, hexadecimal value, binary representation, and ON/OFF state for each register.
+Click **READ** to execute. Results appear in the table, which now shows six columns:
+
+| Column | Description |
+|---|---|
+| Label | User-defined name for this address (amber text when set) |
+| Address | Register or coil address |
+| Dec | Decimal value |
+| Hex | Hexadecimal value |
+| Bin | Binary representation |
+| State | ON / OFF for bit types |
 
 > **Protocol limits enforced:** Maximum 125 registers or 2000 coils per request. Requests outside these limits are rejected before they are sent.
+
+### Labelling Registers
+
+Double-click any row in the results table to assign a name to that address. Enter a label and click OK — the Label column updates immediately and the row is highlighted in amber. Labels are saved per session and per register type, so the same address in Holding Registers and Input Registers can carry different names. Leave the field blank and click OK to clear a label.
+
+Labels persist for the lifetime of the session and are re-applied every time new read results arrive for that address.
+
+### Layout
+
+The results table occupies most of the workspace. A draggable divider separates the data area from the log panel below — drag the divider up or down to give the table more or less space.
 
 ---
 
@@ -210,32 +229,64 @@ Values can be entered as decimal (`100`), hexadecimal (`0x0064`), or binary (`0b
 100, 200, 0xFF, 0
 ```
 
+### Write Once
+
+Click **⚡ WRITE ONCE** to send the write immediately. If **Confirm before write** is ticked, a summary dialog appears first.
+
+### Continuous Write
+
+The **Continuous Write** section repeats the write automatically at a fixed interval:
+
+| Field | Description |
+|---|---|
+| Interval (s) | Seconds between writes — minimum 0.1 s |
+| Last | Timestamp of the most recent write |
+
+Click **▶ START WRITE POLLING** to begin. Click **■ STOP WRITE POLLING** to stop. The confirmation dialog is always suppressed during continuous write — configure and verify your values with **WRITE ONCE** first.
+
+> **Warning:** Continuous write sends repeated commands to the device at the configured interval. Use with care in production environments.
+
 ### Confirm Before Write
 
-When this checkbox is ticked (the default), a confirmation dialog shows the full details of the pending write before it is executed. This is a safety measure recommended for production environments. Untick it only when running repetitive test writes.
+When ticked (the default), a confirmation dialog appears before each manual write. This is automatically bypassed during continuous write.
 
 ### Format Converter
 
-The converter at the bottom of the Write tab translates between decimal, hexadecimal, and binary without needing to perform a write. Enter a value in any notation and click the appropriate button.
+The converter at the bottom of the Write tab translates between decimal, hexadecimal, and binary without performing a write. Enter a value in any notation and click the appropriate button.
 
 ---
 
 ## Polling
 
-Select a session, then click the **⟳ POLL** tab.
+Select a session, then click the **⟳ POLL** tab. The tab contains two independent sections.
 
-Polling automatically repeats the current Read tab operation at a fixed interval, updating the results table each time.
+### Continuous Read
+
+Repeats the Read tab operation at a fixed interval, updating the results table each time.
 
 | Field | Description |
 |---|---|
 | Interval (s) | Seconds between reads — minimum 0.1 s |
-| Last | Timestamp of the most recent successful poll |
+| Last | Timestamp of the most recent successful read |
 
-Click **▶ START POLLING** to begin. Click **■ STOP POLLING** to stop.
+Click **▶ START READ POLLING** to begin. Click **■ STOP READ POLLING** to stop.
 
-> **Multiple sessions can be polled simultaneously.** Each session has its own independent polling thread. Changing the Read tab settings on one session does not affect what another session is polling.
+### Continuous Write
 
-> **Note:** Poll settings (address, count, type, unit) are saved per session. If you switch to a different session and back, polling continues with the original settings.
+Repeats the Write tab operation at a fixed interval without any confirmation prompt.
+
+| Field | Description |
+|---|---|
+| Interval (s) | Seconds between writes — minimum 0.1 s |
+| Last | Timestamp of the most recent write |
+
+Click **▶ START WRITE POLLING** to begin. Click **■ STOP WRITE POLLING** to stop.
+
+Both controls are also available directly on the **↑ WRITE** tab under the Continuous Write section.
+
+> **Multiple sessions can be polled simultaneously.** Each session has its own independent read and write polling threads — up to two threads per session. Changing settings on one session does not affect another.
+
+> **Note:** Read and write poll settings are saved per session. Switching sessions and back resumes polling with the original settings. Both polling loops are automatically stopped when a session disconnects or the application closes.
 
 ---
 

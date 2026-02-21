@@ -177,12 +177,22 @@ class ConnectionSession:
     write_value: str = "0"
     confirm_write: bool = True
 
-    # Polling
+    # Read polling
     polling: bool = False
     poll_interval: float = 1.0
     poll_stop: threading.Event = field(default_factory=threading.Event)
     poll_thread: Optional[threading.Thread] = None
     last_poll_ts: str = ""
+
+    # Continuous write
+    write_polling: bool = False
+    write_poll_interval: float = 1.0
+    write_poll_stop: threading.Event = field(default_factory=threading.Event)
+    write_poll_thread: Optional[threading.Thread] = None
+    last_write_poll_ts: str = ""
+
+    # Register labels: key = "RegisterType:address" e.g. "Holding Registers:100"
+    reg_labels: Dict[str, str] = field(default_factory=dict)
 
     # Per-connection log — deque for O(1) bounded append
     log_entries: object = field(default_factory=lambda: collections.deque(maxlen=500))
@@ -465,22 +475,33 @@ class ModbusMultiClient:
 
     # ─── Workspace ─────────────────────────────────────────────────────────────
     def _build_workspace(self):
-        # Top: config + ops panel (changes per session)
-        self._ops_frame = tk.Frame(self._workspace, bg=BG_DEEP)
-        self._ops_frame.pack(fill="x", padx=10, pady=(10, 4))
+        # Vertical PanedWindow: top = ops+results, bottom = logs
+        self._paned = tk.PanedWindow(self._workspace, orient=tk.VERTICAL,
+                                     bg=GRAY_DIM, sashwidth=5,
+                                     sashrelief="flat", bd=0)
+        self._paned.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Bottom: split — shared global log left, per-session log right
-        log_area = tk.Frame(self._workspace, bg=BG_DEEP)
-        log_area.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # ── Top pane: session header + notebook (read/write/poll) ──────────────
+        self._ops_frame = tk.Frame(self._paned, bg=BG_DEEP)
+        self._paned.add(self._ops_frame, stretch="always", minsize=320)
 
-        # Per-session log (right, larger)
+        # ── Bottom pane: session log | global log ──────────────────────────────
+        log_area = tk.Frame(self._paned, bg=BG_DEEP)
+        self._paned.add(log_area, stretch="never", minsize=80)
+
         self._build_session_log(log_area)
         tk.Frame(log_area, bg=GRAY_DIM, width=1).pack(side="right", fill="y", padx=(4, 0))
-
-        # Global log (left, narrower)
         self._build_global_log(log_area)
 
         self._show_empty_state()
+
+        # Set initial sash position after window is drawn
+        self._workspace.after(50, self._set_initial_sash)
+
+    def _set_initial_sash(self):
+        total = self._paned.winfo_height()
+        if total > 200:
+            self._paned.sash_place(0, 0, max(total - 140, total * 3 // 4))
 
     def _show_empty_state(self):
         for w in self._ops_frame.winfo_children():
@@ -726,7 +747,7 @@ class ModbusMultiClient:
 
         # ── Ops Notebook ───────────────────────────────────────────────────────
         nb = ttk.Notebook(self._ops_frame)
-        nb.pack(fill="x")
+        nb.pack(fill="both", expand=True)
         self._op_widgets["notebook"] = nb
 
         self._build_read_tab(nb, sess)
@@ -768,6 +789,7 @@ class ModbusMultiClient:
             if "write_value" in w:  sess.write_value = w["write_value"].get()
             if "confirm_wr" in w:   sess.confirm_write = w["confirm_wr"].get()
             if "poll_ivl" in w:     sess.poll_interval = float(w["poll_ivl"].get())
+            if "write_ivl" in w:    sess.write_poll_interval = float(w["write_ivl"].get())
         except (ValueError, AttributeError):
             pass
 
@@ -776,14 +798,14 @@ class ModbusMultiClient:
         tab = ttk.Frame(nb, style="Card.TFrame", padding=10)
         nb.add(tab, text=" ↓  READ ")
 
-        row = ttk.Frame(tab, style="Card.TFrame")
-        row.pack(fill="x", pady=(0, 6))
+        ctrl_row = ttk.Frame(tab, style="Card.TFrame")
+        ctrl_row.pack(fill="x", pady=(0, 6))
 
-        lbl = lambda t, w=9: ttk.Label(row, text=t, style="Card.TLabel", width=w)
+        lbl = lambda t, w=9: ttk.Label(ctrl_row, text=t, style="Card.TLabel", width=w)
 
         lbl("Type").pack(side="left")
         rt_var = tk.StringVar(value=sess.read_type)
-        rt_cb = ttk.Combobox(row, textvariable=rt_var, width=18, state="readonly",
+        rt_cb = ttk.Combobox(ctrl_row, textvariable=rt_var, width=18, state="readonly",
                               values=["Holding Registers", "Input Registers",
                                       "Coils", "Discrete Inputs"])
         rt_cb.pack(side="left", padx=(0, 10))
@@ -791,50 +813,98 @@ class ModbusMultiClient:
 
         lbl("Address", 8).pack(side="left")
         ra_var = tk.StringVar(value=str(sess.read_addr))
-        ttk.Entry(row, textvariable=ra_var, width=7).pack(side="left", padx=(0, 10))
+        ttk.Entry(ctrl_row, textvariable=ra_var, width=7).pack(side="left", padx=(0, 10))
         self._op_widgets["read_addr"] = ra_var
 
         lbl("Count", 6).pack(side="left")
         rc_var = tk.StringVar(value=str(sess.read_count))
-        ttk.Entry(row, textvariable=rc_var, width=5).pack(side="left", padx=(0, 10))
+        ttk.Entry(ctrl_row, textvariable=rc_var, width=5).pack(side="left", padx=(0, 10))
         self._op_widgets["read_count"] = rc_var
 
         lbl("Unit", 4).pack(side="left")
         ru_var = tk.StringVar(value=str(sess.read_unit))
-        ttk.Entry(row, textvariable=ru_var, width=4).pack(side="left", padx=(0, 10))
+        ttk.Entry(ctrl_row, textvariable=ru_var, width=4).pack(side="left", padx=(0, 10))
         self._op_widgets["read_unit"] = ru_var
 
-        tk.Button(row, text="READ", bg=BLUE_INFO, fg=BG_DEEP,
+        tk.Button(ctrl_row, text="READ", bg=BLUE_INFO, fg=BG_DEEP,
                   activebackground="#3a85d0", activeforeground=BG_DEEP,
                   font=FONT_UI_B, relief="flat", padx=14, pady=3,
                   cursor="hand2", bd=0,
                   command=lambda: self._do_read(sess.sid)).pack(side="left")
 
-        # Results table
+        ttk.Label(ctrl_row, text="  Double-click row to label it",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(side="right")
+
+        # ── Results table ──────────────────────────────────────────────────────
         tf = ttk.Frame(tab, style="Card.TFrame")
         tf.pack(fill="both", expand=True)
 
         vsb = ttk.Scrollbar(tf, orient="vertical")
         vsb.pack(side="right", fill="y")
+        hsb = ttk.Scrollbar(tf, orient="horizontal")
+        hsb.pack(side="bottom", fill="x")
 
-        cols = ("Address", "Dec", "Hex", "Bin", "State")
+        cols = ("Label", "Address", "Dec", "Hex", "Bin", "State")
         tree = ttk.Treeview(tf, columns=cols, show="headings",
-                             height=5, yscrollcommand=vsb.set)
+                             yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         vsb.config(command=tree.yview)
-        widths = [80, 80, 90, 140, 70]
-        for col, w in zip(cols, widths):
+        hsb.config(command=tree.xview)
+
+        col_cfg = [("Label", 140, "w"), ("Address", 80, "center"),
+                   ("Dec", 90, "center"),  ("Hex", 90, "center"),
+                   ("Bin", 150, "center"), ("State", 60, "center")]
+        for col, w, anc in col_cfg:
             tree.heading(col, text=col)
-            tree.column(col, width=w, anchor="center", minwidth=w)
-        tree.tag_configure("odd",  background=BG_ROW_ALT)
-        tree.tag_configure("even", background=BG_INPUT)
+            tree.column(col, width=w, anchor=anc, minwidth=w)
+
+        tree.tag_configure("odd",     background=BG_ROW_ALT)
+        tree.tag_configure("even",    background=BG_INPUT)
+        tree.tag_configure("labeled", foreground=AMBER_GLOW)
         tree.pack(fill="both", expand=True)
         self._op_widgets["read_tree"] = tree
+
+        # Double-click → label editor
+        def _on_double_click(event):
+            item = tree.identify_row(event.y)
+            if not item:
+                return
+            vals = tree.item(item, "values")
+            if not vals:
+                return
+            addr_str = vals[1]   # Address column
+            rtype = self._op_widgets.get("read_type")
+            rtype_val = rtype.get() if rtype else "Holding Registers"
+            label_key = f"{rtype_val}:{addr_str}"
+            current_label = sess.reg_labels.get(label_key, "")
+            new_label = simpledialog.askstring(
+                "Label Register",
+                "Label for " + rtype_val + " addr " + addr_str + "\n(leave blank to clear)",
+                initialvalue=current_label,
+                parent=self.root)
+            if new_label is None:
+                return   # cancelled
+            new_label = new_label.strip()
+            if new_label:
+                sess.reg_labels[label_key] = new_label
+            elif label_key in sess.reg_labels:
+                del sess.reg_labels[label_key]
+            # Refresh just this row
+            rtype_now = self._op_widgets.get("read_type")
+            rt = rtype_now.get() if rtype_now else rtype_val
+            tag = tree.item(item, "tags")[0] if tree.item(item, "tags") else "even"
+            new_vals = list(vals)
+            new_vals[0] = new_label
+            tags = (tag, "labeled") if new_label else (tag,)
+            tree.item(item, values=new_vals, tags=tags)
+
+        tree.bind("<Double-1>", _on_double_click)
 
     # ─── Write Tab ─────────────────────────────────────────────────────────────
     def _build_write_tab(self, nb, sess: ConnectionSession):
         tab = ttk.Frame(nb, style="Card.TFrame", padding=10)
         nb.add(tab, text=" ↑  WRITE ")
 
+        # ── Target row ──────────────────────────────────────────────────────────
         row = ttk.Frame(tab, style="Card.TFrame")
         row.pack(fill="x", pady=(0, 6))
 
@@ -857,6 +927,7 @@ class ModbusMultiClient:
         ttk.Entry(row, textvariable=wu_var, width=4).pack(side="left")
         self._op_widgets["write_unit"] = wu_var
 
+        # ── Value row ───────────────────────────────────────────────────────────
         row2 = ttk.Frame(tab, style="Card.TFrame")
         row2.pack(fill="x", pady=(0, 6))
 
@@ -865,23 +936,53 @@ class ModbusMultiClient:
         ttk.Entry(row2, textvariable=wv_var, width=36).pack(side="left", padx=(0, 10))
         self._op_widgets["write_value"] = wv_var
         ttk.Label(row2, text="Comma-separated for multiple",
-                   style="Dim.TLabel", font=FONT_MONO_SM).pack(side="left")
+                  style="Dim.TLabel", font=FONT_MONO_SM).pack(side="left")
 
+        # ── Actions row ─────────────────────────────────────────────────────────
         row3 = ttk.Frame(tab, style="Card.TFrame")
         row3.pack(fill="x", pady=(0, 6))
 
         cw_var = tk.BooleanVar(value=sess.confirm_write)
         ttk.Checkbutton(row3, text="Confirm before write",
-                         variable=cw_var).pack(side="left", padx=(0, 20))
+                        variable=cw_var).pack(side="left", padx=(0, 20))
         self._op_widgets["confirm_wr"] = cw_var
 
-        tk.Button(row3, text="⚡ WRITE", bg=RED_DIM, fg="#ff9999",
+        tk.Button(row3, text="⚡ WRITE ONCE", bg=RED_DIM, fg="#ff9999",
                   activebackground=RED_ERR, activeforeground=BG_DEEP,
                   font=FONT_UI_B, relief="flat", padx=14, pady=4,
                   cursor="hand2", bd=0,
                   command=lambda: self._do_write(sess.sid)).pack(side="left")
 
-        # Format converter
+        # ── Continuous write ─────────────────────────────────────────────────────
+        cw_frame = ttk.LabelFrame(tab, text=" Continuous Write ", padding=8)
+        cw_frame.pack(fill="x", pady=(6, 4))
+
+        cwrow = ttk.Frame(cw_frame, style="Card.TFrame")
+        cwrow.pack(fill="x")
+
+        ttk.Label(cwrow, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
+        wivl_var = tk.StringVar(value=str(sess.write_poll_interval))
+        ttk.Entry(cwrow, textvariable=wivl_var, width=8).pack(side="left", padx=(0, 16))
+        self._op_widgets["write_ivl"] = wivl_var
+
+        self._op_widgets["write_poll_last"] = ttk.Label(
+            cwrow,
+            text="Last: " + (sess.last_write_poll_ts or "—"),
+            style="Dim.TLabel", font=FONT_MONO_SM)
+        self._op_widgets["write_poll_last"].pack(side="left")
+
+        wpoll_btn = tk.Button(cw_frame, font=FONT_UI_B, relief="flat", pady=5,
+                              cursor="hand2", bd=0)
+        wpoll_btn.pack(fill="x", pady=(6, 0))
+        self._op_widgets["write_poll_btn"] = wpoll_btn
+        self._update_write_poll_btn(sess)
+        wpoll_btn.config(command=lambda: self._toggle_write_poll(sess.sid))
+
+        ttk.Label(cw_frame,
+                  text="Repeats the write above at the given interval. Confirm dialog is suppressed.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
+
+        # ── Format converter ────────────────────────────────────────────────────
         fmt = ttk.LabelFrame(tab, text=" Format Converter ", padding=8)
         fmt.pack(fill="x", pady=(4, 0))
         frow = ttk.Frame(fmt, style="Card.TFrame")
@@ -907,40 +1008,81 @@ class ModbusMultiClient:
         tab = ttk.Frame(nb, style="Card.TFrame", padding=10)
         nb.add(tab, text=" ⟳  POLL ")
 
-        row = ttk.Frame(tab, style="Card.TFrame")
-        row.pack(fill="x", pady=(0, 8))
+        # ── Read polling ────────────────────────────────────────────────────────
+        rp = ttk.LabelFrame(tab, text=" Continuous Read ", padding=8)
+        rp.pack(fill="x", pady=(0, 8))
 
-        ttk.Label(row, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
+        rrow = ttk.Frame(rp, style="Card.TFrame")
+        rrow.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(rrow, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
         ivl_var = tk.StringVar(value=str(sess.poll_interval))
-        ttk.Entry(row, textvariable=ivl_var, width=8).pack(side="left", padx=(0, 16))
+        ttk.Entry(rrow, textvariable=ivl_var, width=8).pack(side="left", padx=(0, 16))
         self._op_widgets["poll_ivl"] = ivl_var
 
-        self._op_widgets["poll_last"] = ttk.Label(row, text=f"Last: {sess.last_poll_ts or '—'}",
-                                                    style="Dim.TLabel", font=FONT_MONO_SM)
-        self._op_widgets["poll_last"].pack(side="left")
+        last_r = ttk.Label(rrow, text="Last: " + (sess.last_poll_ts or "—"),
+                           style="Dim.TLabel", font=FONT_MONO_SM)
+        last_r.pack(side="left")
+        self._op_widgets["poll_last"] = last_r
 
-        poll_btn = tk.Button(tab, font=FONT_UI_B, relief="flat", pady=6,
-                              cursor="hand2", bd=0)
-        poll_btn.pack(fill="x", pady=(4, 0))
+        poll_btn = tk.Button(rp, font=FONT_UI_B, relief="flat", pady=5,
+                             cursor="hand2", bd=0)
+        poll_btn.pack(fill="x")
         self._op_widgets["poll_btn"] = poll_btn
         self._update_poll_btn(sess)
         poll_btn.config(command=lambda: self._toggle_poll(sess.sid))
 
-        info = ttk.Label(tab,
-            text="Polling uses the Read tab settings (type, address, count, unit).",
-            style="Dim.TLabel", font=FONT_MONO_XS)
-        info.pack(anchor="w", pady=(6, 0))
+        ttk.Label(rp, text="Uses the Read tab settings (type, address, count, unit).",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
+
+        # ── Write polling ───────────────────────────────────────────────────────
+        wp = ttk.LabelFrame(tab, text=" Continuous Write ", padding=8)
+        wp.pack(fill="x", pady=(0, 4))
+
+        wrow = ttk.Frame(wp, style="Card.TFrame")
+        wrow.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(wrow, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
+        wivl_var2 = tk.StringVar(value=str(sess.write_poll_interval))
+        ttk.Entry(wrow, textvariable=wivl_var2, width=8).pack(side="left", padx=(0, 16))
+        self._op_widgets["write_ivl"] = wivl_var2
+
+        last_w = ttk.Label(wrow, text="Last: " + (sess.last_write_poll_ts or "—"),
+                           style="Dim.TLabel", font=FONT_MONO_SM)
+        last_w.pack(side="left")
+        self._op_widgets["write_poll_last"] = last_w
+
+        wpoll_btn = tk.Button(wp, font=FONT_UI_B, relief="flat", pady=5,
+                              cursor="hand2", bd=0)
+        wpoll_btn.pack(fill="x")
+        self._op_widgets["write_poll_btn"] = wpoll_btn
+        self._update_write_poll_btn(sess)
+        wpoll_btn.config(command=lambda: self._toggle_write_poll(sess.sid))
+
+        ttk.Label(wp, text="Uses the Write tab settings. Confirm dialog is suppressed.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
 
     def _update_poll_btn(self, sess: ConnectionSession):
         btn = self._op_widgets.get("poll_btn")
         if not btn:
             return
         if sess.polling:
-            btn.config(text="■  STOP POLLING", bg=RED_DIM, fg=RED_ERR,
-                        activebackground="#3a1010")
+            btn.config(text="■  STOP READ POLLING", bg=RED_DIM, fg=RED_ERR,
+                       activebackground="#3a1010")
         else:
-            btn.config(text="▶  START POLLING", bg=GREEN_DIM, fg=GREEN_OK,
-                        activebackground="#1a4030")
+            btn.config(text="▶  START READ POLLING", bg=GREEN_DIM, fg=GREEN_OK,
+                       activebackground="#1a4030")
+
+    def _update_write_poll_btn(self, sess: ConnectionSession):
+        btn = self._op_widgets.get("write_poll_btn")
+        if not btn:
+            return
+        if sess.write_polling:
+            btn.config(text="■  STOP WRITE POLLING", bg=RED_DIM, fg=RED_ERR,
+                       activebackground="#3a1010")
+        else:
+            btn.config(text="▶  START WRITE POLLING", bg="#3a2000", fg=AMBER_GLOW,
+                       activebackground=AMBER_DIM)
 
     # ─── Connection Actions ─────────────────────────────────────────────────────
     def _toggle_session_connection(self, sid: str):
@@ -1008,6 +1150,8 @@ class ModbusMultiClient:
             return
         if sess.polling:
             self._stop_poll(sid)
+        if sess.write_polling:
+            self._stop_write_poll(sid)
         if sess.client:
             try:
                 sess.client.close()
@@ -1135,6 +1279,9 @@ class ModbusMultiClient:
         tree = self._op_widgets.get("read_tree")
         if not tree:
             return
+        sess = self.sessions.get(sid)
+        reg_labels = sess.reg_labels if sess else {}
+
         for row in tree.get_children():
             tree.delete(row)
 
@@ -1142,34 +1289,49 @@ class ModbusMultiClient:
         values = list(result.bits[:count]) if is_bit else result.registers
 
         for i, val in enumerate(values):
-            tag = "odd" if i % 2 else "even"
             addr = base_addr + i
+            label_key = f"{rtype}:{addr}"
+            row_label = reg_labels.get(label_key, "")
+            tag = "odd" if i % 2 else "even"
+            tags = (tag, "labeled") if row_label else (tag,)
             if is_bit:
                 iv = int(val)
-                tree.insert("", "end", tags=(tag,),
-                             values=(addr, iv, "—", f"{iv:08b}",
-                                     "ON" if val else "OFF"))
+                tree.insert("", "end", tags=tags,
+                             values=(row_label, addr, iv, "—",
+                                     f"{iv:08b}", "ON" if val else "OFF"))
             else:
-                tree.insert("", "end", tags=(tag,),
-                             values=(addr, val, f"0x{val:04X}",
+                tree.insert("", "end", tags=tags,
+                             values=(row_label, addr, val, f"0x{val:04X}",
                                      f"{val:016b}", ""))
 
-    def _do_write(self, sid: str):
+    def _do_write(self, sid: str, suppress_confirm: bool = False):
         sess = self.sessions.get(sid)
         if not sess or sess.state != ST_CONNECTED:
             if sess:
                 self._session_log(sess, "Not connected.", "error")
             return
-        w = self._op_widgets
-        try:
-            wtype = w["write_type"].get()
-            addr  = int(w["write_addr"].get(), 0)
-            unit  = int(w["write_unit"].get())
-            raw   = w["write_value"].get().strip()
-            confirm = w["confirm_wr"].get()
-        except (KeyError, ValueError) as e:
-            self._session_log(sess, f"Invalid write params: {e}", "error")
-            return
+        # For non-active sessions (e.g. write poll loop), read params from session object
+        if sid == self.active_sid:
+            w = self._op_widgets
+            try:
+                wtype = w["write_type"].get()
+                addr  = int(w["write_addr"].get(), 0)
+                unit  = int(w["write_unit"].get())
+                raw   = w["write_value"].get().strip()
+                confirm = w["confirm_wr"].get() and not suppress_confirm
+                sess.write_type  = wtype
+                sess.write_addr  = addr
+                sess.write_unit  = unit
+                sess.write_value = raw
+            except (KeyError, ValueError) as e:
+                self._session_log(sess, f"Invalid write params: {e}", "error")
+                return
+        else:
+            wtype   = sess.write_type
+            addr    = sess.write_addr
+            unit    = sess.write_unit
+            raw     = sess.write_value
+            confirm = False   # always suppress for background sessions
         try:
             values = ([int(v.strip(), 0) for v in raw.split(",") if v.strip()]
                       if "," in raw else [int(raw, 0)])
@@ -1286,6 +1448,66 @@ class ModbusMultiClient:
             sess.poll_stop.wait(sess.poll_interval)
             sess.poll_stop.clear()
 
+    # ─── Continuous Write ──────────────────────────────────────────────────────
+    def _toggle_write_poll(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess:
+            return
+        if sess.write_polling:
+            self._stop_write_poll(sid)
+        else:
+            self._start_write_poll(sid)
+
+    def _start_write_poll(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess or sess.state != ST_CONNECTED:
+            if sess:
+                self._session_log(sess, "Cannot start continuous write: not connected.", "error")
+            return
+        try:
+            ivl_str = self._op_widgets["write_ivl"].get() if "write_ivl" in self._op_widgets else "1.0"
+            ivl = float(ivl_str)
+        except (ValueError, AttributeError):
+            ivl = 1.0
+        POLL_MIN = 0.1
+        if ivl < POLL_MIN:
+            self._session_log(sess, f"Write interval too low — clamped to {POLL_MIN}s.", "warn")
+            ivl = POLL_MIN
+        sess.write_poll_interval = ivl
+        sess.write_polling = True
+        sess.write_poll_stop.clear()
+        self._session_log(sess, f"Continuous write started (every {ivl}s).", "info")
+        self._update_write_poll_btn(sess)
+        sess.write_poll_thread = threading.Thread(
+            target=self._write_poll_loop, args=(sid,), daemon=True)
+        sess.write_poll_thread.start()
+
+    def _stop_write_poll(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess:
+            return
+        sess.write_polling = False
+        sess.write_poll_stop.set()
+        self._session_log(sess, "Continuous write stopped.", "warn")
+        if self.active_sid == sid:
+            self.root.after(0, self._update_write_poll_btn, sess)
+
+    def _write_poll_loop(self, sid: str):
+        while True:
+            sess = self.sessions.get(sid)
+            if not sess or not sess.write_polling:
+                break
+            if sess.state == ST_CONNECTED:
+                self.root.after(0, self._do_write, sid, True)   # True = suppress confirm
+                ts = datetime.now().strftime("%H:%M:%S")
+                sess.last_write_poll_ts = ts
+                if self.active_sid == sid:
+                    lbl = self._op_widgets.get("write_poll_last")
+                    if lbl:
+                        self.root.after(0, lbl.config, {"text": f"Last: {ts}"})
+            sess.write_poll_stop.wait(sess.write_poll_interval)
+            sess.write_poll_stop.clear()
+
     # ─── Format Converter ───────────────────────────────────────────────────────
     def _do_fmt(self, fmt: str):
         ci = self._op_widgets.get("conv_in")
@@ -1307,6 +1529,9 @@ class ModbusMultiClient:
     # ─── Cleanup ────────────────────────────────────────────────────────────────
     def on_close(self):
         for sid in list(self.session_order):
+            sess = self.sessions.get(sid)
+            if sess and sess.write_polling:
+                self._stop_write_poll(sid)
             self._session_disconnect(sid, quiet=True)
         self.root.destroy()
 
