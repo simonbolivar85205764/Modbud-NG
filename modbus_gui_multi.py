@@ -1112,13 +1112,13 @@ class ModbusMultiClient:
             return
         try:
             if rtype == "Holding Registers":
-                result = c.read_holding_registers(addr, count, slave=unit)
+                result = c.read_holding_registers(addr, count=count, slave=unit)
             elif rtype == "Input Registers":
-                result = c.read_input_registers(addr, count, slave=unit)
+                result = c.read_input_registers(addr, count=count, slave=unit)
             elif rtype == "Coils":
-                result = c.read_coils(addr, count, slave=unit)
+                result = c.read_coils(addr, count=count, slave=unit)
             else:
-                result = c.read_discrete_inputs(addr, count, slave=unit)
+                result = c.read_discrete_inputs(addr, count=count, slave=unit)
 
             if result.isError():
                 self._session_log(sess, f"Modbus error: {result}", "error")
@@ -1210,13 +1210,13 @@ class ModbusMultiClient:
             return
         try:
             if wtype == "Holding Register":
-                r = c.write_register(addr, values[0], slave=unit)
+                r = c.write_register(addr, value=values[0], slave=unit)
             elif wtype == "Multiple Registers":
-                r = c.write_registers(addr, values, slave=unit)
+                r = c.write_registers(addr, values=values, slave=unit)
             elif wtype == "Coil":
-                r = c.write_coil(addr, bool(values[0]), slave=unit)
+                r = c.write_coil(addr, value=bool(values[0]), slave=unit)
             else:
-                r = c.write_coils(addr, [bool(v) for v in values], slave=unit)
+                r = c.write_coils(addr, values=[bool(v) for v in values], slave=unit)
 
             if r.isError():
                 self._session_log(sess, f"Write error: {r}", "error")

@@ -1,4 +1,4 @@
-# Modbus-NG - Modbus Multi-Session Industrial Client
+# Modbus Multi-Session Industrial Client
 
 A cross-platform desktop GUI for connecting to, reading from, and writing to Modbus-enabled industrial control system (ICS) devices. Supports multiple simultaneous connections, per-session polling, and both Modbus TCP and Modbus RTU (serial) protocols.
 
@@ -9,7 +9,7 @@ Compatible with **Windows** and **Linux**.
 ## Requirements
 
 - **Python 3.8 or later**
-- **pymodbus 3.x**
+- **pymodbus 3.x** (3.0 or later — see version note below)
 - **tkinter** (bundled with Python on Windows; may need separate install on Linux)
 
 ### Install dependencies
@@ -23,6 +23,26 @@ python -m pip install pymodbus
 ```
 pip install pymodbus
 sudo apt install python3-tk
+```
+
+### pymodbus version compatibility
+
+This application uses the **keyword-argument API** introduced in pymodbus 3.5, where `count` and `value` must be passed as named arguments rather than positional ones. This is the current convention for pymodbus 3.5 and later:
+
+```
+python -m pip install "pymodbus>=3.5"
+```
+
+If you see an error like:
+
+```
+Read exception: ModbusClientMixin.read_holding_registers() takes 2 positional arguments but 3 were given
+```
+
+your installed version of pymodbus is older than 3.5. Upgrade it with:
+
+```
+python -m pip install --upgrade pymodbus
 ```
 
 > **Important — Windows multi-Python environments:** If you have more than one Python installation, always use `python -m pip install` rather than just `pip install`. This ensures the package installs into the same Python that will run the script. The application will display the exact command to use if it cannot find pymodbus at startup.
@@ -45,14 +65,14 @@ The window is divided into three areas:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│   MODBUS  MULTI-SESSION INDUSTRIAL CLIENT      2/3 connected │
+│  ◈ MODBUS  MULTI-SESSION INDUSTRIAL CLIENT        2/3 connected │
 ├─────────────┬────────────────────────────────────────────────┤
-│             │  ● PLC-01  192.168.1.10               CONNECT  │
-│ CONNECTIONS │   Edit                                         │
-│             │ ───────────────────────────────────────────────│
+│             │  ● PLC-01  192.168.1.10              ▶ CONNECT  │
+│ CONNECTIONS │  ⚙ Edit                                         │
+│             │ ─────────────────────────────────────────────── │
 │  ● PLC-01   │  [ ↓ READ ] [ ↑ WRITE ] [ ⟳ POLL ]            │
-│  ○ PLC-02   │                                                │
-│  ● RTU-Dev  │                                                │
+│  ○ PLC-02   │                                                  │
+│  ● RTU-Dev  │                                                  │
 │             ├────────────────────┬───────────────────────────┤
 │ [+ Add]     │  SESSION LOG       │  GLOBAL LOG               │
 │             │                    │                           │
@@ -252,6 +272,14 @@ Shows events from all sessions in chronological order, prefixed with the source 
 
 ## Common Issues
 
+### "Read/Write exception: takes 2 positional arguments but 3 were given"
+
+Your pymodbus version is older than 3.5. The pymodbus 3.5 release changed `count` and `value` from positional to keyword-only arguments. Upgrade to fix it:
+
+```
+python -m pip install --upgrade pymodbus
+```
+
 ### "pymodbus not found" at startup
 
 The application is running under a different Python than the one where pymodbus was installed. The Global Log will show the exact command to fix this:
@@ -302,5 +330,5 @@ Log out and back in for the change to take effect.
 ---
 
 ## License
-GNU General Public License v3.0
+
 This software is provided as-is for authorised use by qualified personnel on systems they have permission to access. Misuse against systems without authorisation may be illegal.
