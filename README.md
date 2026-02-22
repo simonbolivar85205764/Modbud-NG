@@ -263,7 +263,7 @@ The table shows: Label, Address, Type, Value(s).
 | **+ Add** | Open the entry editor to add a new row |
 | **✎ Edit** | Edit the selected row (also double-click) |
 | **− Remove** | Delete the selected row |
-| **⚡ WRITE ALL** | Execute all rows sequentially, in order |
+| **⚡ WRITE ALL** | Execute all rows sequentially, in order, once |
 
 **Adding or editing an entry:**
 
@@ -283,6 +283,30 @@ When **Confirm before write** is ticked, a summary of all pending writes is show
 The session log shows per-entry success or failure (✓ / ✗) and a final summary count.
 
 > **Note:** WRITE ALL uses the Unit ID from the Unit field at the top of the tab for all entries.
+
+---
+
+### Continuous Write All
+
+Repeats the entire multi-address table automatically at a fixed interval, below the table in the **Multi-Address Write** section.
+
+| Field | Description |
+|---|---|
+| Interval (s) | Seconds between full-table write cycles — minimum 0.1 s |
+| Last | Timestamp of the most recent cycle |
+
+Click **▶ START WRITE ALL POLLING** to begin. Click **■ STOP WRITE ALL POLLING** to stop.
+
+**Behaviour details:**
+
+- Each cycle executes every row in the table in order, using the same worker as WRITE ALL
+- The confirmation dialog is always suppressed — verify your entries with WRITE ALL first
+- The Unit ID is captured at the moment polling starts and held for the duration of the polling session; to change it, stop polling, update the Unit field, then start again
+- Invalid or unparseable rows are silently skipped during polling (they do not abort the cycle) — fix them in the table and the next cycle will pick up the corrected values
+- Polling stops automatically if the session disconnects or the application closes
+- The current interval and state are also visible on the **⟳ POLL** tab under "Continuous Write All"
+
+> **Warning:** This sends repeated write commands to every address in the table on every cycle. Use with care in production environments.
 
 ---
 
@@ -313,7 +337,7 @@ Click **▶ START READ POLLING** to begin. Click **■ STOP READ POLLING** to st
 
 ### Continuous Write
 
-Repeats the Write tab operation at a fixed interval without any confirmation prompt.
+Repeats the single-address write at a fixed interval without any confirmation prompt.
 
 | Field | Description |
 |---|---|
@@ -324,9 +348,22 @@ Click **▶ START WRITE POLLING** to begin. Click **■ STOP WRITE POLLING** to 
 
 Both controls are also available directly on the **↑ WRITE** tab under the Continuous Write section.
 
-> **Multiple sessions can be polled simultaneously.** Each session has its own independent read and write polling threads — up to two threads per session. Changing settings on one session does not affect another.
+### Continuous Write All
 
-> **Note:** Read and write poll settings are saved per session. Switching sessions and back resumes polling with the original settings. Both polling loops are automatically stopped when a session disconnects or the application closes.
+Repeats the entire multi-address write table at a fixed interval.
+
+| Field | Description |
+|---|---|
+| Interval (s) | Seconds between full-table cycles — minimum 0.1 s |
+| Last | Timestamp of the most recent cycle |
+
+Click **▶ START WRITE ALL POLLING** to begin. Click **■ STOP WRITE ALL POLLING** to stop.
+
+Both controls are also accessible on the **↑ WRITE** tab, below the multi-address table.
+
+> **Multiple sessions can have all three pollers running simultaneously.** Each session has its own independent read thread, write thread, and write-all thread. Changing settings on one session does not affect another.
+
+> **Note:** All poll intervals and states are saved per session. All three polling loops stop automatically when a session disconnects or the application closes.
 
 ---
 

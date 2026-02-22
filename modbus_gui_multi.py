@@ -194,6 +194,14 @@ class ConnectionSession:
     # Multi-address write table — list of {label, addr, wtype, value} dicts
     write_entries: List[Dict] = field(default_factory=list)
 
+    # Continuous multi-address write polling
+    multi_write_polling: bool = False
+    multi_write_poll_interval: float = 1.0
+    multi_write_poll_stop: threading.Event = field(default_factory=threading.Event)
+    multi_write_poll_thread: Optional[threading.Thread] = None
+    last_multi_write_poll_ts: str = ""
+    multi_write_unit: int = 1
+
     # Register labels: key = "RegisterType:address" e.g. "Holding Registers:100"
     reg_labels: Dict[str, str] = field(default_factory=dict)
 
@@ -793,6 +801,7 @@ class ModbusMultiClient:
             if "confirm_wr" in w:   sess.confirm_write = w["confirm_wr"].get()
             if "poll_ivl" in w:     sess.poll_interval = float(w["poll_ivl"].get())
             if "write_ivl" in w:    sess.write_poll_interval = float(w["write_ivl"].get())
+            if "multi_write_ivl" in w: sess.multi_write_poll_interval = float(w["multi_write_ivl"].get())
         except (ValueError, AttributeError):
             pass
 
@@ -1106,6 +1115,34 @@ class ModbusMultiClient:
         _refresh_tree()
 
         ttk.Label(ma_frame, text="Double-click a row to edit it.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(2, 6))
+
+        # ── Continuous Write All ─────────────────────────────────────────────────
+        tk.Frame(ma_frame, bg=GRAY_DIM, height=1).pack(fill="x", pady=(0, 6))
+
+        cwa_row = ttk.Frame(ma_frame, style="Card.TFrame")
+        cwa_row.pack(fill="x")
+
+        ttk.Label(cwa_row, text="Interval (s)", style="Card.TLabel", width=12).pack(side="left")
+        mwivl_var = tk.StringVar(value=str(sess.multi_write_poll_interval))
+        ttk.Entry(cwa_row, textvariable=mwivl_var, width=8).pack(side="left", padx=(0, 16))
+        self._op_widgets["multi_write_ivl"] = mwivl_var
+
+        mw_last_lbl = ttk.Label(cwa_row,
+                                 text="Last: " + (sess.last_multi_write_poll_ts or "—"),
+                                 style="Dim.TLabel", font=FONT_MONO_SM)
+        mw_last_lbl.pack(side="left")
+        self._op_widgets["multi_write_poll_last"] = mw_last_lbl
+
+        mw_poll_btn = tk.Button(ma_frame, font=FONT_UI_B, relief="flat", pady=5,
+                                cursor="hand2", bd=0)
+        mw_poll_btn.pack(fill="x", pady=(6, 0))
+        self._op_widgets["multi_write_poll_btn"] = mw_poll_btn
+        self._update_multi_write_poll_btn(sess)
+        mw_poll_btn.config(command=lambda: self._toggle_multi_write_poll(sess.sid))
+
+        ttk.Label(ma_frame,
+                  text="Repeats WRITE ALL at the given interval. Confirm dialog is suppressed.",
                   style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
 
         # ── Format converter ────────────────────────────────────────────────────
@@ -1207,9 +1244,36 @@ class ModbusMultiClient:
         ttk.Label(wp, text="Configure interval on the ↑ WRITE tab.",
                   style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(6, 0))
 
+        # ── Continuous Write All ─────────────────────────────────────────────────
+        mwp = ttk.LabelFrame(tab, text=" Continuous Write All ", padding=8)
+        mwp.pack(fill="x", pady=(0, 4))
+
+        mwdot, mwlast, mwivl, mwbtn = _status_row(mwp, "multi_write")
+
+        def _refresh_multi_write():
+            active = sess.multi_write_polling
+            mwdot.config(fg="#ff8c00" if active else TEXT_DIM)
+            mwlast.config(text="Last: " + (sess.last_multi_write_poll_ts or "—"))
+            mwivl.config(text=f"every {sess.multi_write_poll_interval}s" if active else "")
+            if active:
+                mwbtn.config(text="■  STOP WRITE ALL POLLING", bg=RED_DIM, fg=RED_ERR,
+                             activebackground="#3a1010")
+            else:
+                mwbtn.config(text="▶  START WRITE ALL POLLING", bg="#3a1a00", fg="#ff8c00",
+                             activebackground="#5a2800")
+
+        def _toggle_multi_write():
+            self._toggle_multi_write_poll(sess.sid)
+            tab.after(50, _refresh_multi_write)
+
+        mwbtn.config(command=_toggle_multi_write)
+        ttk.Label(mwp, text="Configure interval on the ↑ WRITE tab (Multi-Address section).",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(6, 0))
+
         # Initial paint
         _refresh_read()
         _refresh_write()
+        _refresh_multi_write()
 
     def _update_poll_btn(self, sess: ConnectionSession):
         btn = self._op_widgets.get("poll_btn")
@@ -1232,6 +1296,17 @@ class ModbusMultiClient:
         else:
             btn.config(text="▶  START WRITE POLLING", bg="#3a2000", fg=AMBER_GLOW,
                        activebackground=AMBER_DIM)
+
+    def _update_multi_write_poll_btn(self, sess: ConnectionSession):
+        btn = self._op_widgets.get("multi_write_poll_btn")
+        if not btn:
+            return
+        if sess.multi_write_polling:
+            btn.config(text="■  STOP WRITE ALL POLLING", bg=RED_DIM, fg=RED_ERR,
+                       activebackground="#3a1010")
+        else:
+            btn.config(text="▶  START WRITE ALL POLLING", bg="#3a1a00", fg="#ff8c00",
+                       activebackground="#5a2800")
 
     # ─── Connection Actions ─────────────────────────────────────────────────────
     def _toggle_session_connection(self, sid: str):
@@ -1301,6 +1376,8 @@ class ModbusMultiClient:
             self._stop_poll(sid)
         if sess.write_polling:
             self._stop_write_poll(sid)
+        if sess.multi_write_polling:
+            self._stop_multi_write_poll(sid)
         if sess.client:
             try:
                 sess.client.close()
@@ -1871,6 +1948,93 @@ class ModbusMultiClient:
             sess.write_poll_stop.wait(sess.write_poll_interval)
             sess.write_poll_stop.clear()
 
+    # ─── Continuous Write All ──────────────────────────────────────────────────
+    def _toggle_multi_write_poll(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess:
+            return
+        if sess.multi_write_polling:
+            self._stop_multi_write_poll(sid)
+        else:
+            self._start_multi_write_poll(sid)
+
+    def _start_multi_write_poll(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess or sess.state != ST_CONNECTED:
+            if sess:
+                self._session_log(sess, "Cannot start Write All polling: not connected.", "error")
+            return
+        if not sess.write_entries:
+            self._session_log(sess, "Cannot start Write All polling: no entries in table.", "warn")
+            return
+        try:
+            ivl_str = (self._op_widgets["multi_write_ivl"].get()
+                       if "multi_write_ivl" in self._op_widgets else "1.0")
+            ivl = float(ivl_str)
+        except (ValueError, AttributeError):
+            ivl = 1.0
+        POLL_MIN = 0.1
+        if ivl < POLL_MIN:
+            self._session_log(sess, f"Write All interval clamped to {POLL_MIN}s.", "warn")
+            ivl = POLL_MIN
+        # Snapshot current unit from widget if this is the active session
+        if sid == self.active_sid:
+            try:
+                u = self._op_widgets.get("write_unit")
+                sess.multi_write_unit = int(u.get()) if u else sess.write_unit
+            except (ValueError, AttributeError):
+                sess.multi_write_unit = sess.write_unit
+        sess.multi_write_poll_interval = ivl
+        sess.multi_write_polling = True
+        sess.multi_write_poll_stop.clear()
+        self._session_log(sess,
+            f"Write All polling started ({len(sess.write_entries)} entries, every {ivl}s).", "info")
+        self._update_multi_write_poll_btn(sess)
+        sess.multi_write_poll_thread = threading.Thread(
+            target=self._multi_write_poll_loop, args=(sid,), daemon=True)
+        sess.multi_write_poll_thread.start()
+
+    def _stop_multi_write_poll(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess:
+            return
+        sess.multi_write_polling = False
+        sess.multi_write_poll_stop.set()
+        self._session_log(sess, "Write All polling stopped.", "warn")
+        if self.active_sid == sid:
+            self.root.after(0, self._update_multi_write_poll_btn, sess)
+
+    def _multi_write_poll_loop(self, sid: str):
+        while True:
+            sess = self.sessions.get(sid)
+            if not sess or not sess.multi_write_polling:
+                break
+            if sess.state == ST_CONNECTED and sess.write_entries:
+                # Build validated entry list inline (suppress confirm always)
+                unit = sess.multi_write_unit
+                parsed = []
+                for e in sess.write_entries:
+                    try:
+                        addr = int(str(e["addr"]).strip(), 0)
+                        values = [int(v.strip(), 0)
+                                  for v in str(e["value"]).split(",") if v.strip()]
+                        if values:
+                            parsed.append((addr, e["wtype"], values, e.get("label", "")))
+                    except (ValueError, KeyError):
+                        pass   # bad entry — skip silently in poll loop
+                if parsed:
+                    threading.Thread(
+                        target=self._multi_write_worker,
+                        args=(sess, parsed, unit), daemon=True).start()
+                ts = datetime.now().strftime("%H:%M:%S")
+                sess.last_multi_write_poll_ts = ts
+                if self.active_sid == sid:
+                    lbl = self._op_widgets.get("multi_write_poll_last")
+                    if lbl:
+                        self.root.after(0, lbl.config, {"text": f"Last: {ts}"})
+            sess.multi_write_poll_stop.wait(sess.multi_write_poll_interval)
+            sess.multi_write_poll_stop.clear()
+
     # ─── Format Converter ───────────────────────────────────────────────────────
     def _do_fmt(self, fmt: str):
         ci = self._op_widgets.get("conv_in")
@@ -1895,6 +2059,8 @@ class ModbusMultiClient:
             sess = self.sessions.get(sid)
             if sess and sess.write_polling:
                 self._stop_write_poll(sid)
+            if sess and sess.multi_write_polling:
+                self._stop_multi_write_poll(sid)
             self._session_disconnect(sid, quiet=True)
         self.root.destroy()
 
