@@ -203,56 +203,96 @@ The results table occupies most of the workspace. A draggable divider separates 
 
 ## Writing Data
 
-Select a session, then click the **↑ WRITE** tab.
+Select a session, then click the **↑ WRITE** tab. The tab has three distinct write modes.
+
+---
+
+### Single-Address Write
+
+Writes one value or a contiguous block of values to a single starting address.
 
 | Field | Description |
 |---|---|
 | Type | What to write |
 | Address | Target register or coil address (0–65535, decimal or `0x` hex) |
 | Unit | Slave/unit ID |
-| Value(s) | One or more values, comma-separated for multi-register writes |
+| Value(s) | One or more values, comma-separated for block writes |
 
 **Write types:**
 
-| Type | Description |
-|---|---|
-| Holding Register | Write a single 16-bit register (FC06) |
-| Multiple Registers | Write a block of 16-bit registers in one request (FC16) |
-| Coil | Write a single coil ON or OFF (FC05) |
-| Multiple Coils | Write a block of coils in one request (FC15) |
+| Type | Function Code | Description |
+|---|---|---|
+| Holding Register | FC06 | Write a single 16-bit register |
+| Multiple Registers | FC16 | Write a contiguous block of 16-bit registers |
+| Coil | FC05 | Write a single coil ON or OFF |
+| Multiple Coils | FC15 | Write a contiguous block of coils |
 
-### Value Format
-
-Values can be entered as decimal (`100`), hexadecimal (`0x0064`), or binary (`0b01100100`). For multi-register or multi-coil writes, separate values with commas:
+**Value format:** Values can be entered as decimal (`100`), hexadecimal (`0x0064`), or binary (`0b01100100`). Comma-separate for multiple:
 
 ```
 100, 200, 0xFF, 0
 ```
 
-### Write Once
+Click **⚡ WRITE ONCE** to send immediately. If **Confirm before write** is ticked, a summary dialog appears first.
 
-Click **⚡ WRITE ONCE** to send the write immediately. If **Confirm before write** is ticked, a summary dialog appears first.
+---
 
 ### Continuous Write
 
-The **Continuous Write** section repeats the write automatically at a fixed interval:
+Repeats the single-address write above at a fixed interval:
 
 | Field | Description |
 |---|---|
 | Interval (s) | Seconds between writes — minimum 0.1 s |
 | Last | Timestamp of the most recent write |
 
-Click **▶ START WRITE POLLING** to begin. Click **■ STOP WRITE POLLING** to stop. The confirmation dialog is always suppressed during continuous write — configure and verify your values with **WRITE ONCE** first.
+Click **▶ START WRITE POLLING** to begin, **■ STOP WRITE POLLING** to stop. The confirmation dialog is always suppressed during continuous write.
 
-> **Warning:** Continuous write sends repeated commands to the device at the configured interval. Use with care in production environments.
+> **Warning:** Continuous write sends repeated commands at the configured interval. Verify your values with WRITE ONCE first.
+
+---
+
+### Multi-Address Write
+
+Sends independent writes to any number of different addresses in a single operation — each row can target a completely different address, type, and value.
+
+The table shows: Label, Address, Type, Value(s).
+
+| Button | Action |
+|---|---|
+| **+ Add** | Open the entry editor to add a new row |
+| **✎ Edit** | Edit the selected row (also double-click) |
+| **− Remove** | Delete the selected row |
+| **⚡ WRITE ALL** | Execute all rows sequentially, in order |
+
+**Adding or editing an entry:**
+
+Each entry has four fields:
+
+| Field | Description |
+|---|---|
+| Label | Optional name for this write (shown in the table and the log) |
+| Address | Register or coil address (decimal or `0x` hex) |
+| Type | One of the four write types above |
+| Value(s) | Comma-separated values — same format as single-address writes |
+
+All entries are validated before any write is sent. If any row has an invalid address or unparseable value, the entire operation is blocked and the errors are shown in a dialog.
+
+When **Confirm before write** is ticked, a summary of all pending writes is shown before execution.
+
+The session log shows per-entry success or failure (✓ / ✗) and a final summary count.
+
+> **Note:** WRITE ALL uses the Unit ID from the Unit field at the top of the tab for all entries.
+
+---
 
 ### Confirm Before Write
 
-When ticked (the default), a confirmation dialog appears before each manual write. This is automatically bypassed during continuous write.
+When ticked (the default), a confirmation dialog appears before both WRITE ONCE and WRITE ALL. Automatically bypassed during continuous write.
 
 ### Format Converter
 
-The converter at the bottom of the Write tab translates between decimal, hexadecimal, and binary without performing a write. Enter a value in any notation and click the appropriate button.
+Translates between decimal, hexadecimal, and binary without performing a write. Enter a value in any notation and click the appropriate button.
 
 ---
 

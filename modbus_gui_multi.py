@@ -191,6 +191,9 @@ class ConnectionSession:
     write_poll_thread: Optional[threading.Thread] = None
     last_write_poll_ts: str = ""
 
+    # Multi-address write table — list of {label, addr, wtype, value} dicts
+    write_entries: List[Dict] = field(default_factory=list)
+
     # Register labels: key = "RegisterType:address" e.g. "Holding Registers:100"
     reg_labels: Dict[str, str] = field(default_factory=dict)
 
@@ -939,30 +942,30 @@ class ModbusMultiClient:
         tab = ttk.Frame(nb, style="Card.TFrame", padding=10)
         nb.add(tab, text=" ↑  WRITE ")
 
-        # ── Target row ──────────────────────────────────────────────────────────
-        row = ttk.Frame(tab, style="Card.TFrame")
-        row.pack(fill="x", pady=(0, 6))
+        # ── Row 1: Type / Address / Unit ────────────────────────────────────────
+        row1 = ttk.Frame(tab, style="Card.TFrame")
+        row1.pack(fill="x", pady=(0, 6))
 
-        lbl = lambda t, w=9: ttk.Label(row, text=t, style="Card.TLabel", width=w)
+        lbl1 = lambda t, w=9: ttk.Label(row1, text=t, style="Card.TLabel", width=w)
 
-        lbl("Type").pack(side="left")
+        lbl1("Type").pack(side="left")
         wt_var = tk.StringVar(value=sess.write_type)
-        ttk.Combobox(row, textvariable=wt_var, width=18, state="readonly",
+        ttk.Combobox(row1, textvariable=wt_var, width=18, state="readonly",
                      values=["Holding Register", "Multiple Registers",
                               "Coil", "Multiple Coils"]).pack(side="left", padx=(0, 10))
         self._op_widgets["write_type"] = wt_var
 
-        lbl("Address", 8).pack(side="left")
+        lbl1("Address", 8).pack(side="left")
         wa_var = tk.StringVar(value=str(sess.write_addr))
-        ttk.Entry(row, textvariable=wa_var, width=7).pack(side="left", padx=(0, 10))
+        ttk.Entry(row1, textvariable=wa_var, width=7).pack(side="left", padx=(0, 10))
         self._op_widgets["write_addr"] = wa_var
 
-        lbl("Unit", 4).pack(side="left")
+        lbl1("Unit", 4).pack(side="left")
         wu_var = tk.StringVar(value=str(sess.write_unit))
-        ttk.Entry(row, textvariable=wu_var, width=4).pack(side="left")
+        ttk.Entry(row1, textvariable=wu_var, width=4).pack(side="left")
         self._op_widgets["write_unit"] = wu_var
 
-        # ── Value row ───────────────────────────────────────────────────────────
+        # ── Row 2: Value(s) ─────────────────────────────────────────────────────
         row2 = ttk.Frame(tab, style="Card.TFrame")
         row2.pack(fill="x", pady=(0, 6))
 
@@ -973,7 +976,7 @@ class ModbusMultiClient:
         ttk.Label(row2, text="Comma-separated for multiple",
                   style="Dim.TLabel", font=FONT_MONO_SM).pack(side="left")
 
-        # ── Actions row ─────────────────────────────────────────────────────────
+        # ── Row 3: Confirm + Write Once ─────────────────────────────────────────
         row3 = ttk.Frame(tab, style="Card.TFrame")
         row3.pack(fill="x", pady=(0, 6))
 
@@ -1014,7 +1017,95 @@ class ModbusMultiClient:
         wpoll_btn.config(command=lambda: self._toggle_write_poll(sess.sid))
 
         ttk.Label(cw_frame,
-                  text="Repeats the write above at the given interval. Confirm dialog is suppressed.",
+                  text="Repeats the single write above at the given interval. Confirm dialog is suppressed.",
+                  style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
+
+        # ── Multi-Address Write ──────────────────────────────────────────────────
+        ma_frame = ttk.LabelFrame(tab, text=" Multi-Address Write ", padding=8)
+        ma_frame.pack(fill="both", expand=True, pady=(6, 4))
+
+        # Toolbar
+        ma_ctrl = ttk.Frame(ma_frame, style="Card.TFrame")
+        ma_ctrl.pack(fill="x", pady=(0, 6))
+
+        def _add_entry():
+            result = self._show_entry_dialog(sess)
+            if result:
+                sess.write_entries.append(result)
+                _refresh_tree()
+
+        def _edit_entry():
+            sel = ma_tree.selection()
+            if not sel:
+                return
+            idx = ma_tree.index(sel[0])
+            result = self._show_entry_dialog(sess, existing=sess.write_entries[idx])
+            if result:
+                sess.write_entries[idx] = result
+                _refresh_tree()
+
+        def _remove_entry():
+            sel = ma_tree.selection()
+            if not sel:
+                return
+            idx = ma_tree.index(sel[0])
+            del sess.write_entries[idx]
+            _refresh_tree()
+
+        def _refresh_tree():
+            for item in ma_tree.get_children():
+                ma_tree.delete(item)
+            for i, e in enumerate(sess.write_entries):
+                tag = "odd" if i % 2 else "even"
+                ma_tree.insert("", "end", tags=(tag,),
+                               values=(e.get("label",""), e["addr"],
+                                       e["wtype"], e["value"]))
+
+        for btn_txt, btn_cmd, btn_bg, btn_fg in [
+            ("+ Add",   _add_entry,    BG_PANEL,   TEXT_DIM),
+            ("✎ Edit",  _edit_entry,   BG_PANEL,   TEXT_DIM),
+            ("− Remove",_remove_entry, BG_PANEL,   RED_ERR),
+        ]:
+            tk.Button(ma_ctrl, text=btn_txt, bg=btn_bg, fg=btn_fg,
+                      activebackground=GRAY_DIM, activeforeground=TEXT_MAIN,
+                      font=FONT_LABEL, relief="flat", padx=10, pady=3,
+                      cursor="hand2", bd=0, command=btn_cmd
+                      ).pack(side="left", padx=(0, 4))
+
+        tk.Button(ma_ctrl, text="⚡ WRITE ALL", bg=RED_DIM, fg="#ff9999",
+                  activebackground=RED_ERR, activeforeground=BG_DEEP,
+                  font=FONT_UI_B, relief="flat", padx=14, pady=3,
+                  cursor="hand2", bd=0,
+                  command=lambda: self._do_multi_write(sess.sid)
+                  ).pack(side="right")
+
+        # Table
+        ma_tf = ttk.Frame(ma_frame, style="Card.TFrame")
+        ma_tf.pack(fill="both", expand=True)
+
+        ma_vsb = ttk.Scrollbar(ma_tf, orient="vertical")
+        ma_vsb.pack(side="right", fill="y")
+
+        ma_cols = ("Label", "Address", "Type", "Value(s)")
+        ma_tree = ttk.Treeview(ma_tf, columns=ma_cols, show="headings",
+                                yscrollcommand=ma_vsb.set, selectmode="browse")
+        ma_vsb.config(command=ma_tree.yview)
+
+        ma_col_cfg = [("Label", 130, "w"), ("Address", 80, "center"),
+                      ("Type", 160, "w"), ("Value(s)", 200, "w")]
+        for col, w, anc in ma_col_cfg:
+            ma_tree.heading(col, text=col)
+            ma_tree.column(col, width=w, anchor=anc, minwidth=60)
+
+        ma_tree.tag_configure("odd",  background=BG_ROW_ALT)
+        ma_tree.tag_configure("even", background=BG_INPUT)
+        ma_tree.pack(fill="both", expand=True)
+        ma_tree.bind("<Double-1>", lambda e: _edit_entry())
+        self._op_widgets["ma_tree"] = ma_tree
+
+        _refresh_tree()
+
+        ttk.Label(ma_frame, text="Double-click a row to edit it.",
                   style="Dim.TLabel", font=FONT_MONO_XS).pack(anchor="w", pady=(4, 0))
 
         # ── Format converter ────────────────────────────────────────────────────
@@ -1506,7 +1597,221 @@ class ModbusMultiClient:
             sess.poll_stop.wait(sess.poll_interval)
             sess.poll_stop.clear()
 
-    # ─── Continuous Write ──────────────────────────────────────────────────────
+    # ─── Entry Dialog (for multi-address write rows) ──────────────────────────
+    def _show_entry_dialog(self, sess: ConnectionSession,
+                            existing: dict = None) -> dict:
+        """
+        Popup for adding / editing a single multi-address write entry.
+        Returns dict or None if cancelled.
+        """
+        d = tk.Toplevel(self.root)
+        d.title("Edit Write Entry" if existing else "Add Write Entry")
+        d.configure(bg=BG_DEEP)
+        d.resizable(False, False)
+        d.grab_set()
+        d.transient(self.root)
+        result = {}
+
+        e = existing or {}
+
+        lbl_var  = tk.StringVar(value=e.get("label", ""))
+        addr_var = tk.StringVar(value=str(e.get("addr", "0")))
+        type_var = tk.StringVar(value=e.get("wtype", "Holding Register"))
+        val_var  = tk.StringVar(value=e.get("value", "0"))
+
+        # Header
+        tk.Label(d, text="Write Entry", bg=BG_DEEP, fg=AMBER,
+                 font=FONT_HEAD).pack(anchor="w", padx=20, pady=(16, 2))
+        tk.Label(d, text="Target address, type, and value for this write.",
+                 bg=BG_DEEP, fg=TEXT_DIM, font=FONT_LABEL).pack(anchor="w", padx=20)
+        tk.Frame(d, bg=GRAY_DIM, height=1).pack(fill="x", pady=(10, 0))
+
+        body = tk.Frame(d, bg=BG_CARD, padx=20, pady=14)
+        body.pack(fill="both", padx=20, pady=8)
+        body.columnconfigure(1, weight=1)
+
+        def row(label, var, row_n, combo_vals=None):
+            tk.Label(body, text=label, bg=BG_CARD, fg=TEXT_DIM,
+                     font=FONT_LABEL, anchor="w", width=10
+                     ).grid(row=row_n, column=0, sticky="w", pady=4, padx=(0, 8))
+            if combo_vals:
+                w = ttk.Combobox(body, textvariable=var, values=combo_vals,
+                                 width=22, state="readonly")
+            else:
+                w = ttk.Entry(body, textvariable=var, width=24)
+            w.grid(row=row_n, column=1, sticky="ew", pady=4)
+
+        row("Label",   lbl_var,  0)
+        row("Address", addr_var, 1)
+        row("Type",    type_var, 2,
+            combo_vals=["Holding Register", "Multiple Registers",
+                        "Coil", "Multiple Coils"])
+        row("Value(s)", val_var, 3)
+
+        tk.Label(body, text="Comma-separate multiple values for block writes",
+                 bg=BG_CARD, fg=TEXT_DIM, font=FONT_MONO_XS
+                 ).grid(row=4, column=1, sticky="w", pady=(0, 4))
+
+        tk.Frame(d, bg=GRAY_DIM, height=1).pack(fill="x", pady=(0, 0))
+
+        btn_bar = tk.Frame(d, bg=BG_DEEP)
+        btn_bar.pack(fill="x", padx=20, pady=12)
+
+        def on_ok():
+            try:
+                addr = int(addr_var.get().strip(), 0)
+            except ValueError:
+                messagebox.showerror("Invalid", "Address must be a number (decimal or 0x hex).", parent=d)
+                return
+            if not (0 <= addr <= 65535):
+                messagebox.showerror("Invalid", f"Address {addr} out of range (0–65535).", parent=d)
+                return
+            raw_val = val_var.get().strip()
+            try:
+                _ = [int(v.strip(), 0) for v in raw_val.split(",") if v.strip()]
+            except ValueError:
+                messagebox.showerror("Invalid", f"Cannot parse value(s): {raw_val!r}", parent=d)
+                return
+            result.update({"label": lbl_var.get().strip(),
+                           "addr":  addr_var.get().strip(),
+                           "wtype": type_var.get(),
+                           "value": raw_val})
+            d.destroy()
+
+        tk.Button(btn_bar, text="Cancel", bg=BG_PANEL, fg=TEXT_DIM,
+                  activebackground=GRAY_DIM, activeforeground=TEXT_MAIN,
+                  font=FONT_UI, relief="flat", padx=20, pady=7,
+                  cursor="hand2", bd=0, command=d.destroy
+                  ).pack(side="right", padx=(8, 0))
+        tk.Button(btn_bar, text="Save" if existing else "Add",
+                  bg=AMBER_DIM, fg=AMBER_GLOW,
+                  activebackground=AMBER, activeforeground=BG_DEEP,
+                  font=FONT_UI_B, relief="flat", padx=20, pady=7,
+                  cursor="hand2", bd=0, command=on_ok
+                  ).pack(side="right")
+
+        d.bind("<Return>", lambda e: on_ok())
+        d.bind("<Escape>", lambda e: d.destroy())
+        d.update_idletasks()
+        w = d.winfo_reqwidth()
+        h = d.winfo_reqheight()
+        px = self.root.winfo_rootx() + (self.root.winfo_width()  - w) // 2
+        py = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        d.geometry(f"{w}x{h}+{px}+{py}")
+        self.root.wait_window(d)
+        return result if result else None
+
+    # ─── Multi-Address Write ────────────────────────────────────────────────────
+    def _do_multi_write(self, sid: str):
+        sess = self.sessions.get(sid)
+        if not sess or sess.state != ST_CONNECTED:
+            if sess:
+                self._session_log(sess, "Not connected.", "error")
+            return
+        if not sess.write_entries:
+            self._session_log(sess, "No entries in Multi-Address Write table.", "warn")
+            return
+
+        # Validate all entries before sending anything
+        errors = []
+        parsed = []
+        unit_str = self._op_widgets.get("write_unit")
+        try:
+            unit = int(unit_str.get()) if unit_str and sid == self.active_sid else sess.write_unit
+        except (ValueError, AttributeError):
+            unit = sess.write_unit
+        if not (1 <= unit <= 247):
+            self._session_log(sess, f"Unit ID {unit} out of range (1–247).", "error")
+            return
+
+        for i, e in enumerate(sess.write_entries):
+            try:
+                addr = int(str(e["addr"]).strip(), 0)
+            except ValueError:
+                errors.append(f"Row {i+1}: bad address {e['addr']!r}")
+                continue
+            if not (0 <= addr <= 65535):
+                errors.append(f"Row {i+1}: address {addr} out of range (0–65535)")
+                continue
+            raw = str(e["value"]).strip()
+            try:
+                values = [int(v.strip(), 0) for v in raw.split(",") if v.strip()]
+                if not values:
+                    raise ValueError("empty")
+            except ValueError:
+                errors.append(f"Row {i+1}: cannot parse value(s) {raw!r}")
+                continue
+            wtype = e["wtype"]
+            if "Coil" not in wtype:
+                bad = [v for v in values if not (0 <= v <= 65535)]
+                if bad:
+                    errors.append(f"Row {i+1}: value(s) out of range (0–65535): {bad}")
+                    continue
+            parsed.append((addr, wtype, values, e.get("label", "")))
+
+        if errors:
+            messagebox.showerror("Validation Errors",
+                                 "\n".join(errors), parent=self.root)
+            return
+
+        # Confirm if enabled
+        confirm = False
+        cw = self._op_widgets.get("confirm_wr")
+        if cw and sid == self.active_sid:
+            confirm = cw.get()
+        if confirm:
+            summary_lines = [f"Session: {sess.label}  Unit: {unit}",
+                             str(len(parsed)) + " addresses will be written:\n"]
+            for addr, wtype, values, label in parsed:
+                name = f" ({label})" if label else ""
+                summary_lines.append(f"  {wtype}  addr={addr}{name}  \u2192 {values}")
+            if not messagebox.askyesno("Confirm Multi-Write",
+                                       "\n".join(summary_lines),
+                                       icon="warning", parent=self.root):
+                self._session_log(sess, "Multi-write cancelled.", "warn")
+                return
+
+        threading.Thread(target=self._multi_write_worker,
+                         args=(sess, parsed, unit), daemon=True).start()
+
+    def _multi_write_worker(self, sess: ConnectionSession,
+                             entries: list, unit: int):
+        c = sess.client
+        if c is None:
+            self._session_log(sess, "Client disconnected before multi-write.", "error")
+            return
+        total = len(entries)
+        ok_count = 0
+        self._session_log(sess, f"MULTI-WRITE: sending {total} entries (unit={unit})", "info")
+        for addr, wtype, values, label in entries:
+            name = f" [{label}]" if label else ""
+            c2 = sess.client   # re-snapshot each iteration
+            if c2 is None:
+                self._session_log(sess, "Disconnected mid-write — aborting.", "error")
+                break
+            try:
+                if wtype == "Holding Register":
+                    r = c2.write_register(addr, value=values[0], slave=unit)
+                elif wtype == "Multiple Registers":
+                    r = c2.write_registers(addr, values=values, slave=unit)
+                elif wtype == "Coil":
+                    r = c2.write_coil(addr, value=bool(values[0]), slave=unit)
+                else:
+                    r = c2.write_coils(addr, values=[bool(v) for v in values], slave=unit)
+                if r.isError():
+                    self._session_log(sess,
+                        f"  ✗ addr={addr}{name}: {r}", "error")
+                else:
+                    self._session_log(sess,
+                        f"  ✓ addr={addr}{name}: {values}", "ok")
+                    ok_count += 1
+            except Exception as e:
+                self._session_log(sess,
+                    f"  ✗ addr={addr}{name}: exception: {e}", "error")
+        self._session_log(sess,
+            f"Multi-write complete: {ok_count}/{total} succeeded.", "ok" if ok_count == total else "warn")
+
+        # ─── Continuous Write ──────────────────────────────────────────────────────
     def _toggle_write_poll(self, sid: str):
         sess = self.sessions.get(sid)
         if not sess:
